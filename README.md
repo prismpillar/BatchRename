@@ -1,5 +1,5 @@
 # BatchRename
-Rename Files &amp; Folders In Within Seconds. Supports All Rename Functions. 
+Rename Files &amp; Folders Within Seconds. Supports All Rename Functions. 
 
 ### **Script Functions**
 1. **Add Prefix** 
