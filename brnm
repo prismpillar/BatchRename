@@ -1,0 +1,178 @@
+#!/bin/bash
+
+# Default backup folder
+DEFAULT_BACKUP_FOLDER="./backups"
+
+# Initialize variables
+BACKUP_FOLDER="$DEFAULT_BACKUP_FOLDER"
+BACKUP_FILE=""
+PREFIX=""
+SUFFIX=""
+OLD_WORD=""
+NEW_WORD=""
+OLD_EXT=""
+NEW_EXT=""
+TARGET_EXT=""
+TARGET_TYPE="all" # Options: all, files, directories
+RECURSIVE=true # Default behavior is recursive
+BACKUP=false
+RESTORE=false
+RESTORE_FOLDER=""
+DRY_RUN=false
+LOG_FILE=""
+
+# Function to display usage instructions
+show_help() {
+    echo "Batch Rename Script - brnm"
+    echo
+    echo "Usage: brnm [options]"
+    echo
+    echo "General Options:"
+    echo "  -h                  Show this help message."
+    echo "  -A                  Process all subdirectories recursively (default)."
+    echo "  --non-recursive     Process only the current directory."
+    echo
+    echo "Backup and Restore:"
+    echo "  -b                  Backup old names before renaming."
+    echo "  -R                  Restore names from backup."
+    echo "  -B PATH             Specify a backup folder or file."
+    echo "  -rF FOLDER          Restore files only in a specific folder."
+    echo
+    echo "Renaming Options:"
+    echo "  -p PREFIX           Add PREFIX to the beginning of names."
+    echo "  -s SUFFIX           Add SUFFIX to the end of names."
+    echo "  -r OLD [NEW]        Replace OLD word with NEW, or remove OLD."
+    echo "  -x OLD NEW          Change file extension from OLD to NEW."
+    echo "  -x NEW              Change all file extensions to NEW."
+    echo "  -t EXT              Rename only files with the specified extension."
+    echo
+    echo "Logging and Simulation:"
+    echo "  -l FILE             Log changes to FILE."
+    echo "  -n                  Simulate renaming without making changes."
+    echo
+    exit 0
+}
+
+# Parse options
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        -p) PREFIX="$2"; shift ;;
+        -s) SUFFIX="$2"; shift ;;
+        -r) OLD_WORD="$2"; NEW_WORD="$3"; shift 2 ;;
+        -x) [[ "$2" == *" "* ]] && { OLD_EXT="${2%% *}"; NEW_EXT="${2##* }"; } || NEW_EXT="$2"; shift ;;
+        -t) TARGET_EXT="$2"; shift ;;
+        -f) TARGET_TYPE="files" ;;
+        -d) TARGET_TYPE="directories" ;;
+        -b) BACKUP=true ;;
+        -R) RESTORE=true ;;
+        -B) BACKUP_FOLDER="$2"; shift ;;
+        -rF) RESTORE_FOLDER="$2"; shift ;;
+        --non-recursive) RECURSIVE=false ;;
+        -A) RECURSIVE=true ;;
+        -l) LOG_FILE="$2"; shift ;;
+        -n) DRY_RUN=true ;;
+        -h|--help) show_help ;;
+        *) echo "Unknown option: $1"; show_help ;;
+    esac
+    shift
+done
+
+# Function to create a timestamped backup file
+create_backup_file() {
+    mkdir -p "$BACKUP_FOLDER"
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    BACKUP_FILE="$BACKUP_FOLDER/rename_backup_$timestamp.txt"
+}
+
+# Function to rename items
+rename_items() {
+    local path="$1"
+    local find_type=""
+
+    case "$TARGET_TYPE" in
+        files) find_type="-type f" ;;
+        directories) find_type="-type d" ;;
+        all) find_type="" ;;
+    esac
+
+    find "$path" $([ "$RECURSIVE" == true ] || echo "-maxdepth 1") $find_type |
+        while read -r item; do
+            [ "$(basename "$item")" == "$(basename "$BACKUP_FILE")" ] && continue
+            if [ -n "$TARGET_EXT" ] && [[ "${item##*.}" != "$TARGET_EXT" ]]; then
+                continue
+            fi
+
+            local dirname=$(dirname "$item")
+            local basename=$(basename "$item")
+            local newname="$basename"
+
+            [ -n "$PREFIX" ] && newname="${PREFIX}${newname}"
+            [ -n "$SUFFIX" ] && newname="${newname}${SUFFIX}"
+
+            if [ -n "$OLD_WORD" ]; then
+                newname="${newname//$OLD_WORD/$NEW_WORD}"
+            fi
+
+            if [ -n "$OLD_EXT" ] && [[ "$basename" == *.$OLD_EXT ]]; then
+                newname="${newname%.$OLD_EXT}.$NEW_EXT"
+            elif [ -n "$NEW_EXT" ] && [ -z "$OLD_EXT" ]; then
+                newname="${newname%.*}.$NEW_EXT"
+            fi
+
+            if [ "$basename" != "$newname" ]; then
+                if [ "$BACKUP" == true ]; then
+                    echo "$item,$dirname/$newname" >>"$BACKUP_FILE"
+                fi
+                if [ "$DRY_RUN" == true ]; then
+                    echo "Would rename: $item -> $dirname/$newname"
+                else
+                    mv "$item" "$dirname/$newname"
+                    [ -n "$LOG_FILE" ] && echo "Renamed: $item -> $dirname/$newname" >>"$LOG_FILE"
+                fi
+            fi
+        done
+}
+
+# Function to restore from backup
+restore_backup() {
+    if [ -d "$BACKUP_FOLDER" ]; then
+        BACKUP_FILE=$(ls -t "$BACKUP_FOLDER"/rename_backup_*.txt 2>/dev/null | head -n 1)
+        if [ -z "$BACKUP_FILE" ]; then
+            echo "No backup file found in the directory $BACKUP_FOLDER"
+            exit 1
+        fi
+    elif [ -f "$BACKUP_FOLDER" ]; then
+        BACKUP_FILE="$BACKUP_FOLDER"
+    else
+        echo "Invalid backup path: $BACKUP_FOLDER"
+        exit 1
+    fi
+
+    if [ -f "$BACKUP_FILE" ]; then
+        while IFS=, read -r oldname newname; do
+            if [ -z "$RESTORE_FOLDER" ] || [[ "$oldname" == *"$RESTORE_FOLDER"* ]]; then
+                echo "Restoring $newname to $oldname"
+                mv "$newname" "$oldname"
+            fi
+        done <"$BACKUP_FILE"
+        echo "Restore complete."
+    else
+        echo "Backup file not found: $BACKUP_FILE"
+        exit 1
+    fi
+}
+
+# Main logic
+if [ "$RESTORE" == true ]; then
+    restore_backup
+else
+    if [ "$BACKUP" == true ]; then
+        create_backup_file
+    fi
+    rename_items "."
+    echo "Renaming completed."
+    if [ "$BACKUP" == true ]; then
+        echo "Backup saved to $BACKUP_FILE"
+    fi
+fi
